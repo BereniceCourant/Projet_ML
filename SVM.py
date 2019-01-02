@@ -1,6 +1,6 @@
 import random
 import numpy as np
-#import igraph
+import igraph
 from sklearn import svm
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import linear_kernel
@@ -15,7 +15,7 @@ import csv
 from tqdm import tqdm
 
 
-def get_features(training_set, indices, node_info, features_TFIDF = None):
+def get_features(training_set, indices, node_info, features_TFIDF = None, graph = None, aut_indices = None, graph_citations = None):
     nltk.download('punkt') # for tokenization
     nltk.download('stopwords')
     stpwds = set(nltk.corpus.stopwords.words("english"))
@@ -29,7 +29,10 @@ def get_features(training_set, indices, node_info, features_TFIDF = None):
     temp_diff = []
     
     # number of common authors
-    comm_auth = []
+    auth_0 = []
+    auth_1 = []
+    auth_2 = []
+    
     
     tfidf1 = []
     tfidf2 = []
@@ -37,6 +40,8 @@ def get_features(training_set, indices, node_info, features_TFIDF = None):
     tfidf4 = []
     
     journal = []
+    
+    dist_citation = []
     
     counter = 0
     for i in range(len(training_set)):
@@ -62,13 +67,16 @@ def get_features(training_set, indices, node_info, features_TFIDF = None):
         
         source_auth = source_info[3].split(",")
         target_auth = target_info[3].split(",")
+        (aut_0, aut_1, aut_2) = get_auteurs_012(source_auth, target_auth, aut_indices, graph)
         
         source_journal = source_info[4]
         target_journal = target_info[4]
         
         overlap_title.append(len(set(source_title).intersection(set(target_title))))
         temp_diff.append(int(source_info[1]) - int(target_info[1]))
-        comm_auth.append(len(set(source_auth).intersection(set(target_auth))))
+        auth_0.append(aut_0)
+        auth_1.append(aut_1)
+        auth_2.append(aut_2)
         if (source_journal == target_journal):
             journal.append(1)
         else:
@@ -78,19 +86,17 @@ def get_features(training_set, indices, node_info, features_TFIDF = None):
             source_tfidf = features_TFIDF[index_source]
             target_tfidf = features_TFIDF[index_target]
             tfidf1.append((source_tfidf.dot(target_tfidf.T))[0, 0]/np.sqrt(source_tfidf.dot(source_tfidf.T)[0,0]*target_tfidf.dot(target_tfidf.T)[0, 0]))
-            # m1 = np.mean(source_tfidf)
-            # m2 = np.mean(source_tfidf)
-            # product = source_tfidf.dot(target_tfidf.T)[0, 0] - np.sum(source_tfidf)*m2-np.sum(target_tfidf)*m1+m1*m2*source_tfidf.shape[1]
-            # norm_source = source_tfidf.dot(source_tfidf.T)[0, 0] - 2*np.sum(source_tfidf)*m1+m1*m1*source_tfidf.shape[1]
-            # norm_target = target_tfidf.dot(target_tfidf.T)[0, 0] - 2*np.sum(target_tfidf)*m2+m2*m2*source_tfidf.shape[1]
-            # tfidf2.append(product/np.sqrt(norm_source*norm_target))
-            # dif = source_tfidf - target_tfidf
-            # tfidf3.append(np.sqrt((dif.dot(dif.T))[0, 0]))
-            # tfidf4.append((source_tfidf.dot(target_tfidf.T))[0, 0]/(np.sqrt(source_tfidf.dot(source_tfidf.T)[0,0]*target_tfidf.dot(target_tfidf.T)[0, 0]) - (source_tfidf.dot(target_tfidf.T))[0, 0]))
-
-
-            
         
+        
+        if (graph_citations != None):
+            s = source_info[0]
+            t = target_info[0]
+            d = graph_citations.shortest_paths_dijkstra(s, t)[0][0]
+            if d >= 20:
+                d = 20
+            dist_citation.append(d)
+            
+      
         counter += 1
         if counter % 1000 == True:
             print( counter, "training examples processsed")
@@ -98,14 +104,94 @@ def get_features(training_set, indices, node_info, features_TFIDF = None):
     # convert list of lists into array
     # documents as rows, unique words as columns (i.e., example as rows, features as columns)
     if (features_TFIDF == None):
-        training_features = np.array([overlap_title, temp_diff, comm_auth, journal]).T
+        training_features = np.array([overlap_title, temp_diff, auth_0, journal]).T
     else:
-        training_features = np.array([overlap_title, temp_diff, comm_auth, journal, tfidf1]).T
+        if (graph_citations == None):
+            training_features = np.array([overlap_title, temp_diff, auth_0, auth_1, auth_2, journal, tfidf1]).T
+        else:
+            training_features = np.array([overlap_title, temp_diff, auth_0, auth_1, auth_2, journal, tfidf1, dist_citation]).T
+
     
     # scale
     training_features = preprocessing.scale(training_features)
     
     return training_features
+    
+
+def construct_graph_auteurs(indices, node_info):
+    n_aut = 0
+    aut_vu = dict()
+    graph = igraph.Graph(directed=False)
+    edges = []
+
+        
+    for article in node_info:
+        auteurs = article[3].split(',')
+        for a in auteurs:
+            if a in aut_vu:
+                k = aut_vu[a]
+            else:
+                k = n_aut
+                n_aut += 1
+                aut_vu[a] = k
+            graph.add_vertex(k)
+        
+        for i in range(len(auteurs)):
+            for j in range(i+1, len(auteurs)):
+                k1 = aut_vu[auteurs[i]]
+                k2 = aut_vu[auteurs[j]]
+                edges.append((k1, k2))
+    
+    print("n_auteurs = "+str(n_aut)+ " ", end = '')
+    
+    graph.add_edges(edges)
+
+    return graph, aut_vu
+
+def get_auteurs_012(auteurs1, auteurs2, aut_indices, graph):
+    aut_0 = 0
+    aut_1 = 0
+    aut_2 = 0
+    auteurs1_indices = [aut_indices[a] for a in auteurs1]
+    auteurs2_indices = [aut_indices[a] for a in auteurs2]
+    if graph != None:
+        for a1 in auteurs1:
+            k1 = aut_indices[a1]
+            neighbors1 = graph.neighborhood(k1)
+            neighbors2 = graph.neighborhood(k1, order=2)
+            aut_1 += len(set(neighbors1).intersection(set(auteurs2_indices)))
+            aut_2 += len((set(neighbors2).difference(set(neighbors1))).intersection(set(auteurs2_indices)))
+    aut_0 = len(set(auteurs1).intersection(set(auteurs2)))
+    return (aut_0, aut_1, aut_2)
+    
+def construct_graph_citations(training_set, predictions, indices, node_info):
+    graph = igraph.Graph(directed=False)
+    articles_vu = set()
+    
+    for i in range(len(training_set)):
+        source = training_set[i][0]
+        target = training_set[i][1]
+        
+        index_source = indices[source]
+        index_target = indices[target]
+        
+        source_info = node_info[index_source]
+        target_info = node_info[index_target]
+        
+        id_source = source_info[0]
+        id_target = target_info[0]
+        
+        if not (id_source in articles_vu):
+            articles_vu.add(id_source)
+            graph.add_vertex(id_source)
+        if not (id_target in articles_vu):
+            articles_vu.add(id_target)
+            graph.add_vertex(id_target)
+        
+        if predictions[i] == 1:
+            graph.add_edge(id_source, id_target)
+        
+    return graph
     
     
 
@@ -204,8 +290,13 @@ def result_svm(prop):
     training_set_reduced, validation_set = split_training_set(training_set_red, 0.7)
     print("done")
     
+    #Create Graph
+    print("construct graph...", end = '')
+    (graph, aut_indices) = construct_graph_auteurs(indices, node_info)
+    print("done")
+    
     #Compute features for training set
-    training_features = get_features(training_set_reduced, indices, node_info, features_TFIDF)
+    training_features = get_features(training_set_reduced, indices, node_info, features_TFIDF, graph, aut_indices)
     
     # convert labels into integers then into column array
     labels = [int(element[2]) for element in training_set_reduced]
@@ -214,9 +305,9 @@ def result_svm(prop):
     
     # initialize basic SVM
     #classifier = svm.LinearSVC(max_iter=10000, C=1e-1)
-    #classifier = svm.SVC(max_iter=100000, C = 1e1)
+    classifier = svm.SVC(max_iter=1000000, C = 1e1)
     #classifier = svm.SVC(max_iter=100000, kernel='sigmoid', coef0 = 0, gamma = 'scale')
-    classifier = svm.SVC(max_iter=100000, kernel='poly', coef0 = 5, gamma = 'scale')
+    #classifier = svm.SVC(max_iter=100000, kernel='poly', coef0 = 10, gamma = 'scale')
 
     
     # train
@@ -224,17 +315,17 @@ def result_svm(prop):
     
     # test
     # we need to compute the features for the testing set
-    validation_features = get_features(validation_set, indices, node_info, features_TFIDF)
+    validation_features = get_features(validation_set, indices, node_info, features_TFIDF, graph, aut_indices)
     
     # issue predictions
     predictions_SVM = list(classifier.predict(validation_features))
     acc = get_accuracy(validation_set, predictions_SVM)
     
     
-    # #get_Result_for submit
-    # testing_features = get_features(testing_set, indices, node_info, features_TFIDF)
-    # predictions_SVM_submit = list(classifier.predict(testing_features))
-    # write_pred(predictions_SVM_submit, name = "predictions_svm_"+str(prop)+".csv")
+    #get_Result_for submit
+    testing_features = get_features(testing_set, indices, node_info, features_TFIDF, graph, aut_indices)
+    predictions_SVM_submit = list(classifier.predict(testing_features))
+    write_pred(predictions_SVM_submit, name = "predictions_svm_"+str(prop)+".csv")
     
     return acc
     
@@ -391,7 +482,8 @@ def adaBoosting(n, lr, prop):
     labels = list(labels)
     labels_array = np.array(labels)
     
-    classifier = svm.SVC(max_iter=100000)
+    #classifier = svm.SVC(max_iter=100000, kernel='poly', coef0 = 10, gamma = 'scale')
+    classifier = RandomForestClassifier(n_estimators = 100)
     ada_boost = AdaBoostClassifier(classifier, n_estimators=n,learning_rate=lr, algorithm='SAMME')
     ada_boost.fit(features, labels_array)
     
@@ -410,32 +502,94 @@ def adaBoosting(n, lr, prop):
 
 def gradientBoosting(n, lr, prop):
     testing_set, training_set, indices, features_TFIDF, node_info = init()
-    validation = training_set[:30000]
-    training = training_set[30000:]
-    training_set_reduced = split_training_set(training, prop, validation = False)[0]
-    features = get_features(training_set_reduced, indices, node_info, features_TFIDF)
+    print("reduce set...", end = '')
+    training_set_red = split_training_set(training_set, prop, validation = False)[0]
+    training_set_reduced, validation = split_training_set(training_set_red, 0.7)
+    print("done")
+    print("construct graph...", end = '')
+    (graph, aut_indices) = construct_graph_auteurs(indices, node_info)
+    print("done")
+    features = get_features(training_set_reduced, indices, node_info, features_TFIDF, graph, aut_indices)
     
     labels = [int(element[2]) for element in training_set_reduced]
     labels = list(labels)
     labels_array = np.array(labels)
     
-    classifier = svm.SVC(max_iter=10000)
+    classifier = svm.SVC(max_iter=100000, kernel='poly', coef0 = 10, gamma = 'scale')
     grad_boost = GradientBoostingClassifier(n_estimators=n, learning_rate=lr, max_depth=1, random_state=0)
     grad_boost.fit(features, labels_array)
     
-    features_validation = get_features(validation, indices, node_info, features_TFIDF)
+    
+    
+    features_validation = get_features(validation, indices, node_info, features_TFIDF, graph, aut_indices)
     predictions = grad_boost.predict(features_validation)
     
     acc = get_accuracy(validation, predictions)
     
-    # #get result for submit
-    # testing_features = get_features(testing_set, indices, node_info, features_TFIDF)
-    # predictions_SVM_submit = list(clf.predict(testing_features))
-    # write_pred(predictions_SVM_submit, name = "predictions_randomForest_"+str(n)+ "_" + str(prop)+".csv")
+    predictions_training = grad_boost.predict(features)
+    acc_training = get_accuracy(training_set_reduced, predictions_training)
+    print("precision training = " + str(acc_training))
+    
+    #get result for submit
+    testing_features = get_features(testing_set, indices, node_info, features_TFIDF, graph, aut_indices)
+    predictions_SVM_submit = list(clf.predict(testing_features))
+    write_pred(predictions_SVM_submit, name = "predictions_gradientBoosting_"+ "svc_poly_coef0="+ str(10)+ "_ n="+str(n)+ "_prop=" + str(prop)+".csv")
     
     return acc
+
+
+def svm_dist_citation(prop):
+    testing_set, training_set, indices, features_TFIDF, node_info = init()
+    print("reduce set...", end = '')
+    training_set_red = split_training_set(training_set, prop, validation = False)[0]
+    training_set_reduced, validation = split_training_set(training_set_red, 0.7)
+    print("done")
+    print("construct graph...", end = '')
+    (graph, aut_indices) = construct_graph_auteurs(indices, node_info)
+    print("done")
+    
+    labels = [int(element[2]) for element in training_set_reduced]
+    labels = list(labels)
+    labels_array = np.array(labels)
+    
+    classifier_1 = svm.SVC(max_iter=100000, C=1e1)
+    
+    features_train_1 = get_features(training_set_reduced, indices, node_info, features_TFIDF, graph, aut_indices)
+    classifier_1.fit(features_train_1, labels_array)
+    
+    predictions_train_1 = classifier_1.predict(features_train_1)
+    print("construct graph...", end = '')
+    graph_train = construct_graph_citations(training_set_reduced, predictions_train_1, indices, node_info)
+    print("done")
+    
+    features_train_2 = get_features(training_set_reduced, indices, node_info, features_TFIDF, graph, aut_indices, graph_train)
+    classifier_2 = svm.SVC(max_iter=1000000, C=1e1)
+    classifier_2.fit(features_train_2, labels_array)
+    
+    predictions_train_2 = classifier_2.predict(features_train_2)
+
+    
+    features_test_1 = get_features(validation, indices, node_info, features_TFIDF, graph, aut_indices)
+    predictions_test_1 = classifier_1.predict(features_test_1)
+    print("construct graph...", end = '')
+    graph_test = construct_graph_citations(validation, predictions_test_1, indices, node_info)
+    print("done")
+    
+    features_test_2 = get_features(validation, indices, node_info, features_TFIDF, graph, aut_indices, graph_test)
+    predictions_test_2 = classifier_2.predict(features_test_2)
     
     
+    acc = get_accuracy(validation, predictions_test_2)
+    acc_train_1 = get_accuracy(training_set_reduced, predictions_train_1)
+    acc_train_2 = get_accuracy(training_set_reduced, predictions_train_2)
+    acc_test_1 = get_accuracy(validation, predictions_test_1)
+    
+    print("acc train 1 = " + str(acc_train_1))
+    print("acc train 2 = "+str(acc_train_2))
+    print("acc test 1 = "+ str(acc_test_1))
+    
+    return acc
+
 
     
     
