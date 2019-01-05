@@ -10,12 +10,20 @@ from sklearn.datasets import make_classification
 from sklearn.ensemble import AdaBoostClassifier
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
+from scipy.sparse.linalg import svds
+from sklearn.neural_network import MLPClassifier
+from xgboost.sklearn import XGBClassifier
+from sklearn.calibration import CalibratedClassifierCV
+import gensim.downloader as api
+from gensim.test.utils import get_tmpfile
+from gensim.models import word2vec
+import gensim
 import nltk
 import csv
 from tqdm import tqdm
 
 
-def get_features(training_set, indices, node_info, features_TFIDF = None, graph = None, aut_indices = None, graph_citations = None):
+def get_features(training_set, indices, node_info, features_TFIDF = None, TFIDF_reduced = True, graph = None, aut_indices = None, graph_citations = None, embedding=False, new=True, TFIDF_titre=None):
     nltk.download('punkt') # for tokenization
     nltk.download('stopwords')
     stpwds = set(nltk.corpus.stopwords.words("english"))
@@ -24,6 +32,8 @@ def get_features(training_set, indices, node_info, features_TFIDF = None, graph 
     
     # number of overlapping words in title
     overlap_title = []
+    title_s = []
+    title_t = []
     
     # temporal distance between the papers
     temp_diff = []
@@ -34,14 +44,22 @@ def get_features(training_set, indices, node_info, features_TFIDF = None, graph 
     auth_2 = []
     
     
-    tfidf1 = []
-    tfidf2 = []
-    tfidf3 = []
-    tfidf4 = []
+    tfidf_s = []
+    tfidf_t = []
+    tfidf = []
+    word_embedding = []
     
     journal = []
     
     dist_citation = []
+    
+    if embedding:
+        temp_path = get_tmpfile("word2vec.model")
+        if new:
+            word_vectors = api.load("glove-wiki-gigaword-100")
+            word_vectors.save(temp_path)
+        else:
+            word_vectors = word2vec.Word2Vec.load(temp_path)
     
     counter = 0
     for i in range(len(training_set)):
@@ -55,15 +73,25 @@ def get_features(training_set, indices, node_info, features_TFIDF = None, graph 
         source_info = node_info[index_source]
         target_info = node_info[index_target]
         
-        # convert to lowercase and tokenize
-        source_title = source_info[2].lower().split(" ")
-        # remove stopwords
-        source_title = [token for token in source_title if token not in stpwds]
-        source_title = [stemmer.stem(token) for token in source_title]
-        
-        target_title = target_info[2].lower().split(" ")
-        target_title = [token for token in target_title if token not in stpwds]
-        target_title = [stemmer.stem(token) for token in target_title]
+        if TFIDF_titre is None:
+            # convert to lowercase and tokenize
+            source_title = source_info[2].lower().split(" ")
+            # remove stopwords
+            source_title = [token for token in source_title if token not in stpwds]
+            source_title = [stemmer.stem(token) for token in source_title]
+            
+            target_title = target_info[2].lower().split(" ")
+            target_title = [token for token in target_title if token not in stpwds]
+            target_title = [stemmer.stem(token) for token in target_title]
+            
+            overlap_title.append(len(set(source_title).intersection(set(target_title))))
+        else:
+            source_tfidf_title = TFIDF_titre[index_source]
+            target_tfidf_title = TFIDF_titre[index_target]
+            #overlap_title.append((source_tfidf_title.dot(target_tfidf_title.T))[0, 0]/np.sqrt(source_tfidf_title.dot(source_tfidf_title.T)[0,0]*target_tfidf_title.dot(target_tfidf_title.T)[0, 0]))
+
+            title_s.append(source_tfidf_title)
+            title_t.append(target_tfidf_title)
         
         source_auth = source_info[3].split(",")
         target_auth = target_info[3].split(",")
@@ -72,7 +100,15 @@ def get_features(training_set, indices, node_info, features_TFIDF = None, graph 
         source_journal = source_info[4]
         target_journal = target_info[4]
         
-        overlap_title.append(len(set(source_title).intersection(set(target_title))))
+        source_abstract = source_info[5].lower().split(" ")
+        source_abstract = [token for token in source_abstract if token not in stpwds]
+        source_abstract = [stemmer.stem(token) for token in source_abstract]
+        
+        target_abstract = target_info[5].lower().split(" ")
+        target_abstract = [token for token in target_abstract if token not in stpwds]
+        target_abstract = [stemmer.stem(token) for token in target_abstract]
+        
+        
         temp_diff.append(int(source_info[1]) - int(target_info[1]))
         auth_0.append(aut_0)
         auth_1.append(aut_1)
@@ -82,13 +118,21 @@ def get_features(training_set, indices, node_info, features_TFIDF = None, graph 
         else:
             journal.append(0)
         
-        if (features_TFIDF != None):
+        if embedding:
+            similarity = word_vectors.n_similarity(source_abstract, target_abstract)
+            word_embedding.append(similarity)
+        
+        
+        if features_TFIDF is not None:
             source_tfidf = features_TFIDF[index_source]
             target_tfidf = features_TFIDF[index_target]
-            tfidf1.append((source_tfidf.dot(target_tfidf.T))[0, 0]/np.sqrt(source_tfidf.dot(source_tfidf.T)[0,0]*target_tfidf.dot(target_tfidf.T)[0, 0]))
+            if not TFIDF_reduced:
+                tfidf.append((source_tfidf.dot(target_tfidf.T))[0, 0]/np.sqrt(source_tfidf.dot(source_tfidf.T)[0,0]*target_tfidf.dot(target_tfidf.T)[0, 0]))
+            else:
+                tfidf_s.append(source_tfidf)
+                tfidf_t.append(target_tfidf)
         
-        
-        if (graph_citations != None):
+        if graph_citations is not None:
             s = source_info[0]
             t = target_info[0]
             d = graph_citations.shortest_paths_dijkstra(s, t)[0][0]
@@ -103,18 +147,56 @@ def get_features(training_set, indices, node_info, features_TFIDF = None, graph 
             pass
     # convert list of lists into array
     # documents as rows, unique words as columns (i.e., example as rows, features as columns)
-    if (features_TFIDF == None):
+    if features_TFIDF is None:
         training_features = np.array([overlap_title, temp_diff, auth_0, journal]).T
     else:
-        if (graph_citations == None):
-            training_features = np.array([overlap_title, temp_diff, auth_0, auth_1, auth_2, journal, tfidf1]).T
+        L = [temp_diff, auth_0, auth_1, auth_2, journal]
+        
+        if TFIDF_titre is None:
+            L.append(overlap_title)
         else:
-            training_features = np.array([overlap_title, temp_diff, auth_0, auth_1, auth_2, journal, tfidf1, dist_citation]).T
-
+            n = len(title_s)
+            m = len(title_s[0])
+            m2 = len(title_t[0])
+            if m!=m2:
+                print("error"+ str(m)+" " + str(m2))
+            T = [[] for k in range(2*m)]
+            for i in range(n):
+                for j in range(m):
+                    T[j].append(title_s[i][j])
+                    T[j+m].append(title_t[i][j])
+            for X in T:
+                L.append(X)
+                
+        if embedding:
+            L.append(word_embedding)
+            
+        if (TFIDF_reduced):
+            n = len(tfidf_s)
+            m = len(tfidf_s[0])
+            m2 = len(tfidf_t[0])
+            if m!=m2:
+                print("error"+ str(m)+" " + str(m2))
+            T = [[] for k in range(2*m)]
+            for i in range(n):
+                for j in range(m):
+                    T[j].append(tfidf_s[i][j])
+                    T[j+m].append(tfidf_t[i][j])
+            for X in T:
+                L.append(X)
+        else:
+            L.append(tfidf)
+            
+        if graph_citations is not None:
+            L.append(dist_citation)
+            
+        training_features = np.array(L).T
     
     # scale
     training_features = preprocessing.scale(training_features)
     
+    print(np.shape(training_features))
+        
     return training_features
     
 
@@ -154,7 +236,7 @@ def get_auteurs_012(auteurs1, auteurs2, aut_indices, graph):
     aut_2 = 0
     auteurs1_indices = [aut_indices[a] for a in auteurs1]
     auteurs2_indices = [aut_indices[a] for a in auteurs2]
-    if graph != None:
+    if not graph is None:
         for a1 in auteurs1:
             k1 = aut_indices[a1]
             neighbors1 = graph.neighborhood(k1)
@@ -247,7 +329,7 @@ def open_set(file_name):
     return set
     
     
-def init():
+def init(n_svd=100):
     testing_set = open_set("testing_set.txt")
     training_set = open_set("training_set.txt")
     with open("node_information.csv", "r") as f:
@@ -266,8 +348,18 @@ def init():
     # each row is a node in the order of node_info
     features_TFIDF = vectorizer.fit_transform(corpus)
     print("done")
-    
-    return testing_set, training_set, indices, features_TFIDF, node_info
+    print("svd...", end='')
+    u, s, v = svds(features_TFIDF, k=200, return_singular_vectors="u")
+    features_TFIDF_reduced = u.dot(np.diag(s))
+    print("done")
+    #tfidf titre
+    titres = [element[2] for element in node_info]
+    vectorizer_titre = TfidfVectorizer(stop_words="english")
+    features_TFIDF_title = vectorizer_titre.fit_transform(titres)
+    u_titres, s_titres, v_titres = svds(features_TFIDF_title, k=50, return_singular_vectors="u")
+    features_TFIDF_title = u_titres.dot(np.diag(s_titres))
+
+    return testing_set, training_set, indices, features_TFIDF_reduced, features_TFIDF_title, node_info
 
 
 def multiple_split(training_set, n, prop):
@@ -296,7 +388,7 @@ def result_svm(prop):
     print("done")
     
     #Compute features for training set
-    training_features = get_features(training_set_reduced, indices, node_info, features_TFIDF, graph, aut_indices)
+    training_features = get_features(training_set_reduced, indices, node_info, features_TFIDF=features_TFIDF, TFIDF_reduced=True, graph=graph, aut_indices=aut_indices, embedding=True, new=True)
     
     # convert labels into integers then into column array
     labels = [int(element[2]) for element in training_set_reduced]
@@ -315,7 +407,7 @@ def result_svm(prop):
     
     # test
     # we need to compute the features for the testing set
-    validation_features = get_features(validation_set, indices, node_info, features_TFIDF, graph, aut_indices)
+    validation_features = get_features(validation_set, indices, node_info, features_TFIDF=features_TFIDF, TFIDF_reduced=True, graph=graph, aut_indices=aut_indices, embedding=True, new=False)
     
     # issue predictions
     predictions_SVM = list(classifier.predict(validation_features))
@@ -323,7 +415,7 @@ def result_svm(prop):
     
     
     #get_Result_for submit
-    testing_features = get_features(testing_set, indices, node_info, features_TFIDF, graph, aut_indices)
+    testing_features = get_features(testing_set, indices, node_info, features_TFIDF=features_TFIDF, TFIDF_reduced=True, graph=graph, aut_indices=aut_indices)
     predictions_SVM_submit = list(classifier.predict(testing_features))
     write_pred(predictions_SVM_submit, name = "predictions_svm_"+str(prop)+".csv")
     
@@ -504,7 +596,7 @@ def gradientBoosting(n, lr, prop):
     testing_set, training_set, indices, features_TFIDF, node_info = init()
     print("reduce set...", end = '')
     training_set_red = split_training_set(training_set, prop, validation = False)[0]
-    training_set_reduced, validation = split_training_set(training_set_red, 0.7)
+    training_set_reduced, validation = training_set_red[len(training_set_red)//20:], training_set_red[:len(training_set_red)//20]
     print("done")
     print("construct graph...", end = '')
     (graph, aut_indices) = construct_graph_auteurs(indices, node_info)
@@ -532,8 +624,48 @@ def gradientBoosting(n, lr, prop):
     
     #get result for submit
     testing_features = get_features(testing_set, indices, node_info, features_TFIDF, graph, aut_indices)
-    predictions_SVM_submit = list(clf.predict(testing_features))
-    write_pred(predictions_SVM_submit, name = "predictions_gradientBoosting_"+ "svc_poly_coef0="+ str(10)+ "_ n="+str(n)+ "_prop=" + str(prop)+".csv")
+    predictions_SVM_submit = list(grad_boost.predict(testing_features))
+    write_pred(predictions_SVM_submit, name = "predictions_gradientBoosting_"+ "svm_poly_coef0="+ str(10)+ "_ n="+str(n)+ "_prop=" + str(prop)+".csv")
+    
+    return acc
+
+
+def XGBoosting(prop):
+    testing_set, training_set, indices, features_TFIDF, node_info = init()
+    print("reduce set...", end = '')
+    training_set_red = training_set[30000:]
+    validation = training_set[:30000]
+    training_set_reduced = training_set_red[:int(len(training_set_red)*prop)]#split_training_set(training_set, prop, validation = False)[0]
+    print("done")
+    print("construct graph...", end = '')
+    (graph, aut_indices) = construct_graph_auteurs(indices, node_info)
+    print("done")
+    #features = get_features(training_set_reduced, indices, node_info, features_TFIDF, graph, aut_indices)
+    features = np.load("training_features.npy")[:int(len(training_set_red)*prop)]
+
+    
+    labels = [int(element[2]) for element in training_set_reduced]
+    labels = list(labels)
+    labels_array = np.array(labels)
+    
+    clf = XGBClassifier()
+    metLearn=CalibratedClassifierCV(clf, method='isotonic', cv=2)
+    metLearn.fit(features, labels_array)
+    
+    #features_validation = get_features(validation, indices, node_info, features_TFIDF, graph, aut_indices)
+    features_validation = np.load("validation_features.npy")
+    predictions = metLearn.predict(features_validation)
+    
+    acc = get_accuracy(validation, predictions)
+    
+    predictions_training = metLearn.predict(features)
+    acc_training = get_accuracy(training_set_reduced, predictions_training)
+    print("precision training = " + str(acc_training))
+    
+    # #get result for submit
+    # testing_features = get_features(testing_set, indices, node_info, features_TFIDF, graph, aut_indices)
+    # predictions_SVM_submit = list(metLearn.predict(testing_features))
+    # write_pred(predictions_SVM_submit, name = "predictions_gradientBoosting_"+ "svm_poly_coef0="+ str(10)+ "_ n="+str(n)+ "_prop=" + str(prop)+".csv")
     
     return acc
 
@@ -591,11 +723,72 @@ def svm_dist_citation(prop):
     return acc
 
 
+def neural_network(prop, alpha=1e-5, n_svd=100, compute = True):
+    testing_set, training_set, indices, features_TFIDF, features_TFIDF_titre, node_info = init(n_svd)
+    print("reduce set...", end = '')
+    training_set_red = training_set[30000:]
+    validation = training_set[:30000]
+    training_set_reduced = training_set_red[:int(len(training_set_red)*prop)]#split_training_set(training_set, prop, validation = False)[0]
+    print("done")
+    print("construct graph...", end = '')
+    (graph, aut_indices) = construct_graph_auteurs(indices, node_info)
+    print("done")
     
+    labels = [int(element[2]) for element in training_set_reduced]
+    labels = list(labels)
+    labels_array = np.array(labels)
     
+    if compute:
+        training_features = get_features(training_set_reduced, indices, node_info, features_TFIDF=features_TFIDF, TFIDF_reduced=True, graph=graph, aut_indices=aut_indices, TFIDF_titre=features_TFIDF_titre)
+        np.save("training_features", training_features)
+    else:
+        print("load features...", end='')
+        training_features = np.load("training_features_title2.npy")[:int(len(training_set_red)*prop)]
+        print("done")
+        
     
+    clf = MLPClassifier(solver='lbfgs', alpha=alpha, hidden_layer_sizes=(150, 100, 50))
+    clf.fit(training_features, labels_array)
+    
+    if compute:
+        validation_features = get_features(validation, indices, node_info, features_TFIDF=features_TFIDF, TFIDF_reduced=True, graph=graph, aut_indices=aut_indices, TFIDF_titre=features_TFIDF_titre)
+        np.save("validation_features", training_features)
+    else:
+        print("load features..", end='')
+        validation_features = np.load("validation_features_title2.npy")
+        print("done")
+    predictions = clf.predict(validation_features)
+    acc = get_accuracy(validation, predictions)
+    
+    predictions_train = clf.predict(training_features)
+    acc_train = get_accuracy(training_set_reduced, predictions_train)
+    print("train = "+str(acc_train))
+    
+    #get result for submit
+    testing_features = get_features(testing_set, indices, node_info, features_TFIDF, True, graph, aut_indices, TFIDF_titre=features_TFIDF_titre)
+    predictions_SVM_submit = list(clf.predict(testing_features))
+    write_pred(predictions_SVM_submit, name = "predictions_nn_"+ "alpha="+str(alpha)+ "_prop=" + str(prop)+".csv")
+
+    
+    return acc
+
     
 
+def save_all():
+    testing_set, training_set, indices, features_TFIDF, features_TFIDF_titre, node_info = init(100)
+    print("construct graph...", end = '')
+    (graph, aut_indices) = construct_graph_auteurs(indices, node_info)
+    print("done")
+    
+    training_set_reduced = training_set[30000:]
+    validation_set = training_set[:30000]
+    training_features = get_features(training_set_reduced, indices, node_info, features_TFIDF=features_TFIDF, TFIDF_reduced=True, graph=graph, aut_indices=aut_indices, TFIDF_titre=features_TFIDF_titre)
+    np.save("training_features_title2", training_features)
+    validation_features = get_features(validation_set, indices, node_info, features_TFIDF=features_TFIDF, TFIDF_reduced=True, graph=graph, aut_indices=aut_indices, TFIDF_titre=features_TFIDF_titre)
+    np.save("validation_features_title2", validation_features)
+
+    
+    
 ###################
 # random baseline #
 ###################
