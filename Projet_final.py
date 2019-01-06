@@ -476,11 +476,33 @@ def save_all(n_svd, n_svd_title, prop, first=True):
     testing_features = get_features(testing_set, indices, node_info, features_TFIDF, graph, aut_indices, features_TFIDF_titre, graph_references, articles_indices)
     np.save("testing_features_title_graph_"+str(prop), testing_features)
 
+def save_training_features():
+    '''Computes the training features and saves them in a file. Function to be used only if you don't already have the all_training_features.npy file. Takes some times to run. '''
+    testing_set, training_set, indices, features_TFIDF, features_TFIDF_titre, node_info = init(n_svd, n_svd_title)
+    print("construct graph...", end = '')
+    (graph, aut_indices) = construct_graph_author(indices, node_info)
+    print("done")
+    
+    print("construct graph citation...", end='')
+    (graph_references, articles_indices) = construct_graph_references(training_set, indices, node_info)
+    print("done")
+        
+    training_features = get_features(training_set_red, indices, node_info, features_TFIDF, graph, aut_indices, features_TFIDF_titre, graph_references, articles_indices)
+    np.save("all_training_features", training_features)
+    
 
-def final_submission(alpha=1e-5, layers=(150, 100, 50, 20)):
+def final_submission(submission=1):
     '''Function to be used to test our model on the final testing set. It used the features of the training previously saved in a file and the compute the new features of the testing set.'''
     n_svd = 128
     n_svd_title = 20
+    if submission==1:
+        alpha=1e-5
+        layers = (150, 100, 50)
+        name = "prediction1.csv"
+    else:
+        alpha=1e-5
+        layers = (200, 120, 50)
+        name = "prediction2.csv"
     
     testing_set, training_set, indices, features_TFIDF, features_TFIDF_titre, node_info = init(n_svd, n_svd_title)
     
@@ -507,4 +529,4 @@ def final_submission(alpha=1e-5, layers=(150, 100, 50, 20)):
     #get result for submit
     testing_features = get_features(testing_set, indices, node_info, features_TFIDF, graph, aut_indices, features_TFIDF_titre, graph_references, articles_indices)
     predictions_SVM_submit = list(clf.predict(testing_features))
-    write_pred(predictions_SVM_submit, name = "result_prediction.csv")
+    write_pred(predictions_SVM_submit, name = name)
