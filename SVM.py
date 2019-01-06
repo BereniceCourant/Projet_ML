@@ -73,17 +73,13 @@ def get_features(training_set, indices, node_info, features_TFIDF = None, TFIDF_
         source_info = node_info[index_source]
         target_info = node_info[index_target]
         
+        source_title = source_info[2].lower().split(" ")
+        source_title = [token for token in source_title if token not in stpwds]
+        source_title = [stemmer.stem(token) for token in source_title]
+        target_title = target_info[2].lower().split(" ")
+        target_title = [token for token in target_title if token not in stpwds]
+        target_title = [stemmer.stem(token) for token in target_title]
         if TFIDF_titre is None:
-            # convert to lowercase and tokenize
-            source_title = source_info[2].lower().split(" ")
-            # remove stopwords
-            source_title = [token for token in source_title if token not in stpwds]
-            source_title = [stemmer.stem(token) for token in source_title]
-            
-            target_title = target_info[2].lower().split(" ")
-            target_title = [token for token in target_title if token not in stpwds]
-            target_title = [stemmer.stem(token) for token in target_title]
-            
             overlap_title.append(len(set(source_title).intersection(set(target_title))))
         else:
             source_tfidf_title = TFIDF_titre[index_source]
@@ -119,7 +115,7 @@ def get_features(training_set, indices, node_info, features_TFIDF = None, TFIDF_
             journal.append(0)
         
         if embedding:
-            similarity = word_vectors.n_similarity(source_abstract, target_abstract)
+            similarity = word_vectors.n_similarity(target_title, source_title)
             word_embedding.append(similarity)
         
         
@@ -631,7 +627,7 @@ def gradientBoosting(n, lr, prop):
 
 
 def XGBoosting(prop):
-    testing_set, training_set, indices, features_TFIDF, node_info = init()
+    testing_set, training_set, indices, features_TFIDF, features_TFIDF_titre, node_info = init(100)
     print("reduce set...", end = '')
     training_set_red = training_set[30000:]
     validation = training_set[:30000]
@@ -641,7 +637,7 @@ def XGBoosting(prop):
     (graph, aut_indices) = construct_graph_auteurs(indices, node_info)
     print("done")
     #features = get_features(training_set_reduced, indices, node_info, features_TFIDF, graph, aut_indices)
-    features = np.load("training_features.npy")[:int(len(training_set_red)*prop)]
+    features = np.load("training_features_title2.npy")[:int(len(training_set_red)*prop)]
 
     
     labels = [int(element[2]) for element in training_set_reduced]
@@ -653,7 +649,7 @@ def XGBoosting(prop):
     metLearn.fit(features, labels_array)
     
     #features_validation = get_features(validation, indices, node_info, features_TFIDF, graph, aut_indices)
-    features_validation = np.load("validation_features.npy")
+    features_validation = np.load("validation_features_title2.npy")
     predictions = metLearn.predict(features_validation)
     
     acc = get_accuracy(validation, predictions)
@@ -723,12 +719,13 @@ def svm_dist_citation(prop):
     return acc
 
 
-def neural_network(prop, alpha=1e-5, n_svd=100, compute = True):
+def neural_network(prop, alpha=1e-5, n_svd=100, compute = True, embedding=True):
     testing_set, training_set, indices, features_TFIDF, features_TFIDF_titre, node_info = init(n_svd)
     print("reduce set...", end = '')
     training_set_red = training_set[30000:]
-    validation = training_set[:30000]
-    training_set_reduced = training_set_red[:int(len(training_set_red)*prop)]#split_training_set(training_set, prop, validation = False)[0]
+    #validation = training_set[:30000]
+    validation = training_set_red[:20000]
+    training_set_reduced = training_set_red[20000:int(len(training_set_red)*prop)]#split_training_set(training_set, prop, validation = False)[0]
     print("done")
     print("construct graph...", end = '')
     (graph, aut_indices) = construct_graph_auteurs(indices, node_info)
@@ -739,23 +736,34 @@ def neural_network(prop, alpha=1e-5, n_svd=100, compute = True):
     labels_array = np.array(labels)
     
     if compute:
-        training_features = get_features(training_set_reduced, indices, node_info, features_TFIDF=features_TFIDF, TFIDF_reduced=True, graph=graph, aut_indices=aut_indices, TFIDF_titre=features_TFIDF_titre)
-        np.save("training_features", training_features)
+        if embedding:
+            training_features = get_features(training_set_reduced, indices, node_info, features_TFIDF=features_TFIDF, TFIDF_reduced=True, graph=graph, aut_indices=aut_indices, embedding=True, TFIDF_titre=features_TFIDF_titre)
+            np.save("training_features_embedding", training_features)
+        else:
+            training_features = get_features(training_set_reduced, indices, node_info, features_TFIDF=features_TFIDF, TFIDF_reduced=True, graph=graph, aut_indices=aut_indices, TFIDF_titre=features_TFIDF_titre)
+            np.save("training_features", training_features)
+            
     else:
         print("load features...", end='')
-        training_features = np.load("training_features_title2.npy")[:int(len(training_set_red)*prop)]
+        training_features = np.load("training_features_title2.npy")[20000:int(len(training_set_red)*prop)]
         print("done")
         
     
-    clf = MLPClassifier(solver='lbfgs', alpha=alpha, hidden_layer_sizes=(150, 100, 50))
+    clf = MLPClassifier(solver='lbfgs', alpha=alpha, hidden_layer_sizes=(50))
     clf.fit(training_features, labels_array)
     
     if compute:
-        validation_features = get_features(validation, indices, node_info, features_TFIDF=features_TFIDF, TFIDF_reduced=True, graph=graph, aut_indices=aut_indices, TFIDF_titre=features_TFIDF_titre)
-        np.save("validation_features", training_features)
+        if embedding:
+            validation_features = get_features(validation, indices, node_info, features_TFIDF=features_TFIDF, TFIDF_reduced=True, graph=graph, aut_indices=aut_indices, embedding=True, TFIDF_titre=features_TFIDF_titre)
+            np.save("validation_features_embedding", validation_features)
+        else:
+            validation_features = get_features(validation, indices, node_info, features_TFIDF=features_TFIDF, TFIDF_reduced=True, graph=graph, aut_indices=aut_indices, TFIDF_titre=features_TFIDF_titre)
+            np.save("validation_features", validation_features)
+
     else:
         print("load features..", end='')
-        validation_features = np.load("validation_features_title2.npy")
+        #validation_features = np.load("validation_features_title2.npy")
+        validation_features = np.load("training_features_title2.npy")[:20000]
         print("done")
     predictions = clf.predict(validation_features)
     acc = get_accuracy(validation, predictions)
@@ -765,10 +773,9 @@ def neural_network(prop, alpha=1e-5, n_svd=100, compute = True):
     print("train = "+str(acc_train))
     
     #get result for submit
-    testing_features = get_features(testing_set, indices, node_info, features_TFIDF, True, graph, aut_indices, TFIDF_titre=features_TFIDF_titre)
+    testing_features = get_features(testing_set, indices, node_info, features_TFIDF=features_TFIDF, TFIDF_reduced=True, graph=graph, aut_indices=aut_indices, TFIDF_titre=features_TFIDF_titre)
     predictions_SVM_submit = list(clf.predict(testing_features))
     write_pred(predictions_SVM_submit, name = "predictions_nn_"+ "alpha="+str(alpha)+ "_prop=" + str(prop)+".csv")
-
     
     return acc
 
