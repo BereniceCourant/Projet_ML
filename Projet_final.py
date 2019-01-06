@@ -8,6 +8,49 @@ import nltk
 import csv
 
 
+    
+def init(n_svd=100, n_svd_title=20):
+    '''Initialized some variables: testing_set, training_set, node_info, indices, and tfidf vectors for titles and abstracts'''
+    testing_set = open_set("testing_set.txt")
+    training_set = open_set("training_set.txt")
+    with open("node_information.csv", "r") as f:
+        reader = csv.reader(f)
+        node_info  = list(reader)
+    
+    #Create the indices dictionary which gives for each article id its rank in the node_info list
+    IDs = [element[0] for element in node_info]
+    indices = dict()
+    for (i, j) in enumerate(IDs):
+        indices[j] = i
+    
+    #Compute TFIDF vector of each abstract
+    print("tfidf...", end = '')
+    corpus = [element[5] for element in node_info]
+    vectorizer = TfidfVectorizer(stop_words="english")
+    features_TFIDF = vectorizer.fit_transform(corpus)
+    print("done")
+    #Reduce the dimension of those tfidf vectors with an SVD
+    print("svd...", end='')
+    u, s, v = svds(features_TFIDF, k=n_svd, return_singular_vectors="u")
+    features_TFIDF_reduced = u.dot(np.diag(s))
+    print("done")
+    #Do the same for the titles
+    titles = [element[2] for element in node_info]
+    vectorizer_title = TfidfVectorizer(stop_words="english")
+    features_TFIDF_title = vectorizer_title.fit_transform(titles)
+    u_titles, s_titles, v_titles = svds(features_TFIDF_title, k=n_svd_title, return_singular_vectors="u")
+    features_TFIDF_title = u_titles.dot(np.diag(s_titles))
+
+    return testing_set, training_set, indices, features_TFIDF_reduced, features_TFIDF_title, node_info
+    
+
+def init_set():
+    '''Only initialise the testing_set and training_set. Used when the features have already been computed and saved in a file'''
+    testing_set = open_set("testing_set.txt")
+    training_set = open_set("training_set.txt")
+    return testing_set, training_set
+    
+
 def get_features(training_set, indices, node_info, features_TFIDF, graph, aut_indices, TFIDF_titre, graph_citation, articles_indices):
     '''Compute all the features for the given set'''
     nltk.download('punkt') # for tokenization
@@ -343,48 +386,6 @@ def write_pred(prediction, name = "predictions.csv"):
         csv_out.writerow(["id", "category"])
         csv_out.writerows(predictions_SVM)
             
-    
-def init(n_svd=100, n_svd_title=20):
-    '''Initialized some variables: testing_set, training_set, node_info, indices, and tfidf vectors for titles and abstracts'''
-    testing_set = open_set("testing_set.txt")
-    training_set = open_set("training_set.txt")
-    with open("node_information.csv", "r") as f:
-        reader = csv.reader(f)
-        node_info  = list(reader)
-    
-    #Create the indices dictionary which gives for each article id its rank in the node_info list
-    IDs = [element[0] for element in node_info]
-    indices = dict()
-    for (i, j) in enumerate(IDs):
-        indices[j] = i
-    
-    #Compute TFIDF vector of each abstract
-    print("tfidf...", end = '')
-    corpus = [element[5] for element in node_info]
-    vectorizer = TfidfVectorizer(stop_words="english")
-    features_TFIDF = vectorizer.fit_transform(corpus)
-    print("done")
-    #Reduce the dimension of those tfidf vectors with an SVD
-    print("svd...", end='')
-    u, s, v = svds(features_TFIDF, k=n_svd, return_singular_vectors="u")
-    features_TFIDF_reduced = u.dot(np.diag(s))
-    print("done")
-    #Do the same for the titles
-    titles = [element[2] for element in node_info]
-    vectorizer_title = TfidfVectorizer(stop_words="english")
-    features_TFIDF_title = vectorizer_title.fit_transform(titles)
-    u_titles, s_titles, v_titles = svds(features_TFIDF_title, k=n_svd_title, return_singular_vectors="u")
-    features_TFIDF_title = u_titles.dot(np.diag(s_titles))
-
-    return testing_set, training_set, indices, features_TFIDF_reduced, features_TFIDF_title, node_info
-
-def init_set():
-    '''Only initialise the testing_set and training_set. Used when the features have already been computed and saved in a file'''
-    testing_set = open_set("testing_set.txt")
-    training_set = open_set("training_set.txt")
-    return testing_set, training_set
-    
-    
 
 def neural_network(prop, alpha=1e-5, layers=(150, 100, 50), n_svd=128, n_svd_title=20, compute = True):
     '''Create a neural network, train it on a given proportion (prop) of the training set, compute the accuracy on the validation set and compute the result on the testing set. If compute is True we compute all the features, else we only need to load them from a file.'''
