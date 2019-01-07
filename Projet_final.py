@@ -8,6 +8,15 @@ import nltk
 import csv
 
 
+def open_set(file_name):
+    '''Create the list representing the set contains in the given file'''
+    with open(file_name, "r") as f:
+        reader = csv.reader(f)
+        set  = list(reader)
+
+    set = [element[0].split(" ") for element in set]
+    
+    return set
     
 def init(n_svd=100, n_svd_title=20):
     '''Initialized some variables: testing_set, training_set, node_info, indices, and tfidf vectors for titles and abstracts'''
@@ -171,7 +180,7 @@ def get_features(training_set, indices, node_info, features_TFIDF, graph, aut_in
         L.append(X)
     
     L.append(dist_citation)
-    print(dist_citation)
+    #print(dist_citation)
     for k in range(5):
         L.append(nbr_article_per_author_s[k])
         L.append(nbr_article_per_author_t[k])
@@ -208,8 +217,8 @@ def construct_graph_author(indices, node_info):
         #Add the corresponding edges
         for i in range(len(authors)):
             for j in range(i+1, len(authors)):
-                k1 = aut_vu[authors[i]]
-                k2 = aut_vu[authors[j]]
+                k1 = aut_seen[authors[i]]
+                k2 = aut_seen[authors[j]]
                 edges.append((k1, k2))
         
     graph.add_edges(edges)
@@ -222,7 +231,7 @@ def get_authors_01(authors1, authors2, aut_indices, graph):
     aut_1 = 0
     authors1_indices = [aut_indices[a] for a in authors1]
     authors2_indices = [aut_indices[a] for a in authors2]
-    for a1 in auteurs1:
+    for a1 in authors1:
         k1 = aut_indices[a1]
         neighbors1 = graph.neighborhood(k1)
         aut_1 += len(set(neighbors1).intersection(set(authors2_indices)))
@@ -449,13 +458,13 @@ def neural_network(prop, alpha=1e-5, layers=(150, 100, 50), n_svd=128, n_svd_tit
     predictions_SVM_submit = list(clf.predict(testing_features))
     name_layers = ""
     for x in layers:
-        name_layers += int(x) + "_"
+        name_layers += str(x) + "_"
     write_pred(predictions_SVM_submit, name = "predictions_nn_graph"+ "alpha="+str(alpha)+ "_layers="+name_layers+"_prop=" + str(prop)+".csv")
     
     return acc
     
 
-def save_all(n_svd, n_svd_title, prop, first=True):
+def save_all(n_svd, n_svd_title, prop):
     '''Compute all the features and save them in a file'''
     testing_set, training_set, indices, features_TFIDF, features_TFIDF_titre, node_info = init(n_svd, n_svd_title)
     print("construct graph...", end = '')
@@ -478,6 +487,8 @@ def save_all(n_svd, n_svd_title, prop, first=True):
 
 def save_training_features():
     '''Computes the training features and saves them in a file. Function to be used only if you don't already have the all_training_features.npy file. Takes some times to run. '''
+    n_svd = 128
+    n_svd_title = 20
     testing_set, training_set, indices, features_TFIDF, features_TFIDF_titre, node_info = init(n_svd, n_svd_title)
     print("construct graph...", end = '')
     (graph, aut_indices) = construct_graph_author(indices, node_info)
@@ -487,8 +498,11 @@ def save_training_features():
     (graph_references, articles_indices) = construct_graph_references(training_set, indices, node_info)
     print("done")
         
-    training_features = get_features(training_set_red, indices, node_info, features_TFIDF, graph, aut_indices, features_TFIDF_titre, graph_references, articles_indices)
+    training_features = get_features(training_set, indices, node_info, features_TFIDF, graph, aut_indices, features_TFIDF_titre, graph_references, articles_indices)
     np.save("all_training_features", training_features)
+    
+    testing_features = get_features(testing_set, indices, node_info, features_TFIDF, graph, aut_indices, features_TFIDF_titre, graph_references, articles_indices)
+    np.save("all_testing_features", testing_features)
     
 
 def final_submission(submission=1):
@@ -530,3 +544,58 @@ def final_submission(submission=1):
     testing_features = get_features(testing_set, indices, node_info, features_TFIDF, graph, aut_indices, features_TFIDF_titre, graph_references, articles_indices)
     predictions_SVM_submit = list(clf.predict(testing_features))
     write_pred(predictions_SVM_submit, name = name)
+
+def neural_network_all(alpha=1e-5, layers=(150, 100, 50), n_svd=128, n_svd_title=20):
+    '''Create a neural network, train it on a given proportion (prop) of the training set, compute the accuracy on the validation set and compute the result on the testing set. If compute is True we compute all the features, else we only need to load them from a file.'''
+
+    testing_set, training_set = init_set()
+    
+    labels = [int(element[2]) for element in training_set]
+    labels = list(labels)
+    labels_array = np.array(labels)
+
+    print("load features...", end='')
+    training_features = np.load("all_training_features.npy")
+    print("done")
+
+    #Create and train the model
+    clf = MLPClassifier(solver='lbfgs', alpha=alpha, hidden_layer_sizes=layers)
+    clf.fit(training_features, labels_array)
+
+    
+    #Print the result of a prediction on the training set in order to be sure that the neural network is not overfitting
+    predictions_train = clf.predict(training_features)
+    acc_train = get_accuracy(training_set, predictions_train)    
+    
+    #Compute the result of the testing set for submission
+    testing_features = np.load("all_testing_features.npy")
+        
+    predictions_SVM_submit = list(clf.predict(testing_features))
+    name_layers = ""
+    for x in layers:
+        name_layers += str(x) + "_"
+    write_pred(predictions_SVM_submit, name = "predictions_nn_graph"+ "alpha="+str(alpha)+ "_layers="+name_layers+".csv")
+    
+    print("alpha= "+str(alpha)+"_layers=" + name_layers)
+    print("train = "+str(acc_train))
+    print()
+
+    
+def test():
+    #save_training_features()
+    layers1 = (150, 100, 50)
+    layers2 = (200, 120, 50)
+    layers3 = (300, 150, 75)
+    layers4 = (200, 150, 100, 50)
+    layers5 = (400, 200, 75)
+    layers6 = (300, 200, 100, 50)
+    L = [layers1, layers2, layers3, layers4, layers5, layers6]
+    L = L[2:]
+    alpha1 = 1e-5
+    alpha2 = 1e-4
+    alpha3 = 1e-6
+    A = [alpha1, alpha2, alpha3]
+    for alpha in A:
+        for layer in L:
+            neural_network_all(alpha, layer)
+    
